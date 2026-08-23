@@ -55,6 +55,10 @@ modules.builtin
 #
 !.gitignore
 !.mailmap
+!.gitmodules
+!/.github/
+!/.github/workflows/
+!/.github/workflows/build-kernel.yml
 
 #
 # Generated include files

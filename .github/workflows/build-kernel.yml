@@ -1,0 +1,207 @@
+name: Build Virgo KernelSU kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_ref:
+        description: Optional KernelSU branch, tag, or commit; blank uses the pinned submodule
+        required: false
+        default: ""
+      anykernel_ref:
+        description: AnyKernel3 branch, tag, or commit
+        required: false
+        default: master
+      make_jobs:
+        description: Parallel build jobs (use 1 if this legacy tree races)
+        required: true
+        default: "1"
+      extra_make_args:
+        description: Extra make arguments
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  ARCH: arm
+  SUBARCH: arm
+  OUT_DIR: out
+  TOOLCHAIN_ARCHIVE_URL: https://github.com/Deep-sea-lab/kernel_cancro_kernelsu/releases/download/gcc4.9.4/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz
+  TOOLCHAIN_ARCHIVE_SHA256: 232302236c90ec136a42d44bc387d2e1199f5df010b77e97ee590216d2b5b181
+  TOOLCHAIN_PREFIX: /opt/toolchain/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi/bin/arm-linux-gnueabi-
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  ANYKERNEL3_REPOSITORY: https://github.com/osm0sis/AnyKernel3.git
+  EXTRA_MAKE_ARGS: ${{ inputs.extra_make_args }}
+
+jobs:
+  build:
+    name: Build virgo_defconfig
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex git libssl-dev python3 xz-utils zip
+
+      - name: Restore ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-${{ hashFiles('arch/arm/configs/virgo_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-
+            ccache-${{ runner.os }}-virgo-linaro-4.9.4-
+
+      - name: Configure ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=max_size=5G
+          ccache --set-config=compiler_check=content
+          ccache --zero-stats
+
+      - name: Download and extract Linaro GCC 4.9.4
+        run: |
+          sudo install -d -o "$USER" -g "$(id -gn)" /opt/toolchain
+          curl -L --fail --retry 3 --connect-timeout 30 --max-time 300 \
+            "$TOOLCHAIN_ARCHIVE_URL" \
+            -o /opt/toolchain/gcc.tar.xz
+          echo "$TOOLCHAIN_ARCHIVE_SHA256  /opt/toolchain/gcc.tar.xz" | sha256sum -c -
+          tar -xJf /opt/toolchain/gcc.tar.xz -C /opt/toolchain
+          test -x "${TOOLCHAIN_PREFIX}gcc"
+          "${TOOLCHAIN_PREFIX}gcc" --version
+
+      - name: Prepare KernelSU
+        env:
+          KERNELSU_REF: ${{ inputs.kernelsu_ref }}
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive KernelSU
+          if [ -n "$KERNELSU_REF" ]; then
+            git -C KernelSU fetch --force --tags origin "$KERNELSU_REF"
+            git -C KernelSU checkout --detach FETCH_HEAD
+          fi
+          test "$(git config -f .gitmodules --get submodule.KernelSU.url)" = "https://github.com/backslashxx/KernelSU.git"
+          test -f KernelSU/kernel/Kconfig
+          test -L drivers/kernelsu
+          test "$(readlink drivers/kernelsu)" = "../KernelSU/kernel"
+          git -C KernelSU rev-parse HEAD
+
+      - name: Configure kernel
+        run: |
+          mkdir -p "$OUT_DIR"
+          EXTRA_ARGS=()
+          if [ -n "$EXTRA_MAKE_ARGS" ]; then
+            read -r -a EXTRA_ARGS <<< "$EXTRA_MAKE_ARGS"
+          fi
+          MAKE_ARGS=(
+            O="$OUT_DIR"
+            ARCH="$ARCH"
+            SUBARCH="$SUBARCH"
+            CROSS_COMPILE="$TOOLCHAIN_PREFIX"
+            CC="ccache ${TOOLCHAIN_PREFIX}gcc"
+            HOSTCFLAGS="-fcommon"
+          )
+          make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" virgo_defconfig
+          scripts/config --file "$OUT_DIR/.config" --set-str LOCALVERSION "-KernelSU" --disable LOCALVERSION_AUTO
+          make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" silentoldconfig
+          grep -qx 'CONFIG_KSU=y' "$OUT_DIR/.config"
+          grep -qx 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' "$OUT_DIR/.config"
+          make -s "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" kernelrelease
+
+      - name: Build kernel
+        env:
+          JOBS: ${{ inputs.make_jobs }}
+        run: |
+          case "$JOBS" in
+            ''|*[!0-9]*)
+              echo "make_jobs must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$JOBS" -lt 1 ]; then
+            echo "make_jobs must be at least 1" >&2
+            exit 1
+          fi
+          EXTRA_ARGS=()
+          if [ -n "$EXTRA_MAKE_ARGS" ]; then
+            read -r -a EXTRA_ARGS <<< "$EXTRA_MAKE_ARGS"
+          fi
+          MAKE_ARGS=(
+            O="$OUT_DIR"
+            ARCH="$ARCH"
+            SUBARCH="$SUBARCH"
+            CROSS_COMPILE="$TOOLCHAIN_PREFIX"
+            CC="ccache ${TOOLCHAIN_PREFIX}gcc"
+            HOSTCFLAGS="-fcommon"
+          )
+          make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}"
+
+      - name: Package AnyKernel3 flashable zip
+        env:
+          ANYKERNEL_REF: ${{ inputs.anykernel_ref }}
+        run: |
+          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage-dtb"
+          test -s "$IMAGE_PATH"
+          git clone --depth=1 "$ANYKERNEL3_REPOSITORY" AnyKernel3
+          if [ -n "$ANYKERNEL_REF" ]; then
+            git -C AnyKernel3 fetch --depth=1 origin "$ANYKERNEL_REF"
+            git -C AnyKernel3 checkout --detach FETCH_HEAD
+          fi
+          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md
+          cp "$IMAGE_PATH" AnyKernel3/zImage
+          cat > AnyKernel3/anykernel.sh <<'EOF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ### Xiaomi Mi Note (virgo) KernelSU kernel
+
+          properties() { '
+          kernel.string=Xiaomi Mi Note (virgo) KernelSU kernel
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=virgo
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          EOF
+          mkdir -p artifacts
+          ZIP_NAME="AnyKernel3-KernelSU-virgo-${{ github.run_number }}.zip"
+          (cd AnyKernel3 && zip -r9 "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME" . -x '*.git*' 'README.md')
+          cp "$IMAGE_PATH" artifacts/zImage-dtb
+          git -C KernelSU rev-parse HEAD > artifacts/KernelSU-commit.txt
+
+      - name: Show ccache statistics
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: virgo-kernelsu-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
