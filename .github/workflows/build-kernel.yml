@@ -56,10 +56,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-${{ hashFiles('arch/arm/configs/cancro_user_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-cancro-linaro-4.9.4-${{ hashFiles('arch/arm/configs/cancro_user_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-
-            ccache-${{ runner.os }}-virgo-linaro-4.9.4-
+            ccache-${{ runner.os }}-${{ github.ref_name }}-cancro-linaro-4.9.4-
+            ccache-${{ runner.os }}-cancro-linaro-4.9.4-
 
       - name: Configure ccache
         run: |
@@ -160,7 +160,7 @@ jobs:
           cp "$IMAGE_PATH" AnyKernel3/zImage
           cat > AnyKernel3/anykernel.sh <<'EOF'
           ### AnyKernel3 Ramdisk Mod Script
-          ### Xiaomi Mi Note (virgo) KernelSU kernel
+          ### Xiaomi Mi Note (cancro) KernelSU kernel
 
           properties() { '
           kernel.string=Xiaomi M3 KernelSU kernel
@@ -189,7 +189,7 @@ jobs:
           write_boot;
           EOF
           mkdir -p artifacts
-          ZIP_NAME="AnyKernel3-KernelSU-virgo-${{ github.run_number }}.zip"
+          ZIP_NAME="AnyKernel3-KernelSU-cancro-${{ github.run_number }}.zip"
           (cd AnyKernel3 && zip -r9 "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME" . -x '*.git*' 'README.md')
           cp "$IMAGE_PATH" artifacts/zImage-dtb
           git -C KernelSU rev-parse HEAD > artifacts/KernelSU-commit.txt
