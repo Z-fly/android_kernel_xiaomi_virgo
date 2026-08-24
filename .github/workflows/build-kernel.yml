@@ -36,7 +36,7 @@ env:
 
 jobs:
   build:
-    name: Build virgo_defconfig
+    name: Build cancro_user_defconfig
     runs-on: ubuntu-22.04
     timeout-minutes: 180
 
@@ -56,7 +56,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-${{ hashFiles('arch/arm/configs/virgo_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-${{ hashFiles('arch/arm/configs/cancro_user_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-4.9.4-
             ccache-${{ runner.os }}-virgo-linaro-4.9.4-
@@ -110,7 +110,7 @@ jobs:
             CC="ccache ${TOOLCHAIN_PREFIX}gcc"
             HOSTCFLAGS="-fcommon"
           )
-          make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" virgo_defconfig
+          make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" cancro_user_defconfig
           scripts/config --file "$OUT_DIR/.config" --set-str LOCALVERSION "-KernelSU" --disable LOCALVERSION_AUTO
           make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" silentoldconfig
           grep -qx 'CONFIG_KSU=y' "$OUT_DIR/.config"
