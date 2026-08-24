@@ -235,6 +235,14 @@ config DEBUG_SECTION_MISMATCH
 	  - Enable verbose reporting from modpost in order to help resolve
 	    the section mismatches that are reported.
 
+config NO_ERROR_ON_MISMATCH
+	bool "Do not stop build on section mismatches"
+	help
+	  When modpost finds a section mismatch during the build, the build
+	  normally aborts with an error.  Say Y here to downgrade those
+	  mismatches to warnings so that the build can complete.
+	  This is generally not recommended.
+
 config DEBUG_KERNEL
 	bool "Kernel debugging"
 	help
