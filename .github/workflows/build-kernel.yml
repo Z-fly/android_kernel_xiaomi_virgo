@@ -160,7 +160,7 @@ jobs:
           cp "$IMAGE_PATH" AnyKernel3/zImage
           cat > AnyKernel3/anykernel.sh <<'EOF'
           ### AnyKernel3 Ramdisk Mod Script
-          ### Xiaomi Mi Note (cancro) KernelSU kernel
+          ### Xiaomi Mi 3 KernelSU kernel
 
           properties() { '
           kernel.string=Xiaomi M3 KernelSU kernel
