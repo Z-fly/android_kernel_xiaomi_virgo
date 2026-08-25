@@ -1,0 +1,176 @@
+name: Build Virgo kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      anykernel_ref:
+        description: AnyKernel3 branch, tag, or commit
+        required: false
+        default: master
+      make_jobs:
+        description: Parallel build jobs (use 1 if this legacy tree races)
+        required: true
+        default: "1"
+      extra_make_args:
+        description: Extra make arguments
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  ARCH: arm
+  SUBARCH: arm
+  OUT_DIR: out
+  TOOLCHAIN_REPOSITORY: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
+  TOOLCHAIN_REF: android-10.0.0_r47
+  TOOLCHAIN_DIR: /opt/toolchain/arm-linux-androideabi-4.9
+  TOOLCHAIN_PREFIX: /opt/toolchain/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
+  KERNEL_RELEASE: 3.4.113-git
+  KERNEL_LOCALVERSION: -git
+  TZ: Asia/Shanghai
+  KBUILD_BUILD_TIMESTAMP: "Tue Aug 25 12:52:00 CST 2026"
+  KBUILD_BUILD_VERSION: "1"
+  ANYKERNEL3_REPOSITORY: https://github.com/osm0sis/AnyKernel3.git
+  EXTRA_MAKE_ARGS: ${{ inputs.extra_make_args }}
+
+jobs:
+  build:
+    name: Build virgo_defconfig
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex git libssl-dev python3 zip
+      - name: Checkout prebuilt AOSP GCC 4.9
+        run: |
+          sudo install -d -o "$USER" -g "$(id -gn)" /opt/toolchain
+          git init "$TOOLCHAIN_DIR"
+          git -C "$TOOLCHAIN_DIR" remote add origin "$TOOLCHAIN_REPOSITORY"
+          git -C "$TOOLCHAIN_DIR" fetch --depth=1 origin "refs/tags/$TOOLCHAIN_REF"
+          git -C "$TOOLCHAIN_DIR" checkout --detach FETCH_HEAD
+          test -x "${TOOLCHAIN_PREFIX}gcc"
+          echo "Toolchain:"
+          "${TOOLCHAIN_PREFIX}gcc" --version
+      - name: Configure kernel
+        run: |
+          mkdir -p "$OUT_DIR"
+          EXTRA_ARGS=()
+          if [ -n "$EXTRA_MAKE_ARGS" ]; then
+            read -r -a EXTRA_ARGS <<< "$EXTRA_MAKE_ARGS"
+          fi
+          MAKE_ARGS=(
+            O="$OUT_DIR"
+            ARCH="$ARCH"
+            SUBARCH="$SUBARCH"
+            CROSS_COMPILE="$TOOLCHAIN_PREFIX"
+            HOSTCFLAGS="-fcommon"
+            LOCALVERSION=""
+          )
+          make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" virgo_defconfig
+          scripts/config --file "$OUT_DIR/.config" --set-str LOCALVERSION "$KERNEL_LOCALVERSION" --disable LOCALVERSION_AUTO
+          make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" silentoldconfig
+          ACTUAL_RELEASE="$(make -s "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" kernelrelease)"
+          echo "Kernel release: $ACTUAL_RELEASE"
+          test "$ACTUAL_RELEASE" = "$KERNEL_RELEASE"
+      - name: Build kernel
+        env:
+          JOBS: ${{ inputs.make_jobs }}
+        run: |
+          case "$JOBS" in
+            ''|*[!0-9]*)
+              echo "make_jobs must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$JOBS" -lt 1 ]; then
+            echo "make_jobs must be at least 1" >&2
+            exit 1
+          fi
+          EXTRA_ARGS=()
+          if [ -n "$EXTRA_MAKE_ARGS" ]; then
+            read -r -a EXTRA_ARGS <<< "$EXTRA_MAKE_ARGS"
+          fi
+          MAKE_ARGS=(
+            O="$OUT_DIR"
+            ARCH="$ARCH"
+            SUBARCH="$SUBARCH"
+            CROSS_COMPILE="$TOOLCHAIN_PREFIX"
+            HOSTCFLAGS="-fcommon"
+            LOCALVERSION=""
+          )
+          make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" zImage-dtb
+      - name: Verify kernel image and metadata
+        run: |
+          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage-dtb"
+          test -s "$IMAGE_PATH"
+          grep -Fq "#define UTS_RELEASE \"$KERNEL_RELEASE\"" "$OUT_DIR/include/generated/utsrelease.h"
+          grep -Fq "$KBUILD_BUILD_TIMESTAMP" "$OUT_DIR/include/generated/compile.h"
+          ls -lh "$IMAGE_PATH"
+      - name: Package AnyKernel3 flashable zip
+        env:
+          ANYKERNEL_REF: ${{ inputs.anykernel_ref }}
+        run: |
+          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage-dtb"
+          test -s "$IMAGE_PATH"
+          git clone --depth=1 "$ANYKERNEL3_REPOSITORY" AnyKernel3
+          if [ -n "$ANYKERNEL_REF" ]; then
+            git -C AnyKernel3 fetch --depth=1 origin "$ANYKERNEL_REF"
+            git -C AnyKernel3 checkout --detach FETCH_HEAD
+          fi
+          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md
+          cp "$IMAGE_PATH" AnyKernel3/zImage
+          cat > AnyKernel3/anykernel.sh <<'EOF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ### Xiaomi Mi Note (virgo) kernel
+          properties() { '
+          kernel.string=Xiaomi Mi Note (virgo) 3.4.113-git
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=virgo
+          device.name2=cancro
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          }
+          BLOCK=auto;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          EOF
+          mkdir -p artifacts
+          ZIP_NAME="AnyKernel3-virgo-${KERNEL_RELEASE}-${{ github.run_number }}.zip"
+          (
+            cd AnyKernel3
+            zip -r9 "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME" . -x '*.git*' 'README.md'
+          )
+          cp "$IMAGE_PATH" artifacts/zImage-dtb
+          printf 'Kernel release: %s\nBuild timestamp: %s\n' \
+            "$KERNEL_RELEASE" "$KBUILD_BUILD_TIMESTAMP" > artifacts/build-info.txt
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: virgo-${{ env.KERNEL_RELEASE }}-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
