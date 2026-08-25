@@ -7,10 +7,6 @@ on:
         description: Optional KernelSU branch, tag, or commit; blank tracks the latest upstream master
         required: false
         default: ""
-      anykernel_ref:
-        description: AnyKernel3 branch, tag, or commit
-        required: false
-        default: master
       make_jobs:
         description: Parallel build jobs (use 1 if this legacy tree races)
         required: true
@@ -37,7 +33,6 @@ env:
   KBUILD_BUILD_TIMESTAMP: "Tue Aug 25 12:52:00 CST 2026"
   KBUILD_BUILD_VERSION: "1"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
-  ANYKERNEL3_REPOSITORY: https://github.com/osm0sis/AnyKernel3.git
   EXTRA_MAKE_ARGS: ${{ inputs.extra_make_args }}
 
 jobs:
@@ -54,7 +49,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache flex git libssl-dev python3 zip
+          sudo apt-get install -y bc bison build-essential ccache flex git libssl-dev python3
       - name: Restore ccache
         uses: actions/cache@v5
         with:
@@ -147,61 +142,63 @@ jobs:
             LOCALVERSION=""
           )
           make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}"
-      - name: Package AnyKernel3 flashable zip
-        env:
-          ANYKERNEL_REF: ${{ inputs.anykernel_ref }}
+      - name: Repack boot image
         run: |
-          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage-dtb"
-          test -s "$IMAGE_PATH"
-          git clone --depth=1 "$ANYKERNEL3_REPOSITORY" AnyKernel3
-          if [ -n "$ANYKERNEL_REF" ]; then
-            git -C AnyKernel3 fetch --depth=1 origin "$ANYKERNEL_REF"
-            git -C AnyKernel3 checkout --detach FETCH_HEAD
-          fi
-          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md
-          cp "$IMAGE_PATH" AnyKernel3/zImage
-          cat > AnyKernel3/anykernel.sh <<'EOF'
-          ### AnyKernel3 Ramdisk Mod Script
-          ### Xiaomi Mi Note (virgo) KernelSU kernel
-          properties() { '
-          kernel.string=Xiaomi Mi Note (virgo) KernelSU kernel
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=cancro
-          device.name2=
-          device.name3=
-          device.name4=
-          device.name5=
-          supported.versions=
-          supported.patchlevels=
-          supported.vendorpatchlevels=
-          '; }
-          BLOCK=boot;
-          IS_SLOT_DEVICE=0;
-          RAMDISK_COMPRESSION=auto;
-          PATCH_VBMETA_FLAG=auto;
-          . tools/ak3-core.sh;
-          dump_boot;
-          write_boot;
-          EOF
-          mkdir -p artifacts
-          ZIP_NAME="AnyKernel3-KernelSU-virgo-${{ github.run_number }}.zip"
-          (
-            cd AnyKernel3
-            zip -r9 "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME" . -x '*.git*' 'README.md'
+          python3 - ".github/boot.img" "$OUT_DIR/arch/arm/boot/zImage-dtb" \
+            "artifacts/boot-${KERNEL_RELEASE}-${GITHUB_RUN_NUMBER}.img" <<'PY'
+          from pathlib import Path
+          import hashlib
+          import struct
+          import sys
+
+          template_path, kernel_path, output_path = map(Path, sys.argv[1:])
+          boot = template_path.read_bytes()
+          kernel = kernel_path.read_bytes()
+
+          if boot[:8] != b"ANDROID!":
+              raise SystemExit(f"invalid Android boot image: {template_path}")
+          if len(kernel) < 0x28 or struct.unpack_from("<I", kernel, 0x24)[0] != 0x016F2818:
+              raise SystemExit(f"invalid ARM zImage: {kernel_path}")
+
+          u32 = lambda offset: struct.unpack_from("<I", boot, offset)[0]
+          old_kernel_size, ramdisk_size, second_size, page_size, extra_size = map(
+              u32, (8, 16, 24, 36, 40)
           )
-          cp "$IMAGE_PATH" artifacts/zImage-dtb
-          git -C KernelSU rev-parse HEAD > artifacts/KernelSU-commit.txt
+          if page_size < 608 or page_size & (page_size - 1):
+              raise SystemExit(f"invalid page size: {page_size}")
+          align = lambda size: (size + page_size - 1) // page_size * page_size
+
+          offset = page_size + align(old_kernel_size)
+          ramdisk = boot[offset:offset + ramdisk_size]
+          offset += align(ramdisk_size)
+          second = boot[offset:offset + second_size]
+          offset += align(second_size)
+          extra = boot[offset:offset + extra_size]
+          if offset + align(extra_size) != len(boot):
+              raise SystemExit("unexpected legacy boot image layout")
+
+          header = bytearray(boot[:page_size])
+          struct.pack_into("<I", header, 8, len(kernel))
+          digest = hashlib.sha1()
+          for part in (kernel, ramdisk, second, extra):
+              digest.update(part)
+              digest.update(struct.pack("<I", len(part)))
+          header[576:608] = digest.digest() + bytes(12)
+
+          pad = lambda part: part + bytes(align(len(part)) - len(part))
+          image = bytes(header) + b"".join(map(pad, (kernel, ramdisk, second, extra)))
+          output_path.parent.mkdir(parents=True, exist_ok=True)
+          output_path.write_bytes(image)
+          print(f"Repacked {output_path} ({len(image)} bytes)")
+          print(f"SHA-256: {hashlib.sha256(image).hexdigest()}")
+          PY
       - name: Show ccache statistics
         if: always()
         run: ccache --show-stats
-      - name: Upload build artifacts
+      - name: Upload repacked boot image
         uses: actions/upload-artifact@v7
         with:
           name: virgo-kernelsu-${{ github.run_number }}
-          path: artifacts/
+          path: artifacts/boot-${{ env.KERNEL_RELEASE }}-${{ github.run_number }}.img
           if-no-files-found: error
           retention-days: 30
