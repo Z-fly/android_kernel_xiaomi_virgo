@@ -55,6 +55,7 @@ modules.builtin
 #
 !.gitignore
 !.mailmap
+!.gitmodules
 
 # GitHub Actions workflow
 !.github/

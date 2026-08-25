@@ -1,8 +1,12 @@
-name: Build Virgo kernel
+name: Build Virgo KernelSU kernel
 
 on:
   workflow_dispatch:
     inputs:
+      kernelsu_ref:
+        description: Optional KernelSU branch, tag, or commit; blank tracks the latest upstream master
+        required: false
+        default: ""
       anykernel_ref:
         description: AnyKernel3 branch, tag, or commit
         required: false
@@ -27,8 +31,8 @@ env:
   TOOLCHAIN_REF: android-10.0.0_r47
   TOOLCHAIN_DIR: /opt/toolchain/arm-linux-androideabi-4.9
   TOOLCHAIN_PREFIX: /opt/toolchain/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
-  KERNEL_RELEASE: 3.4.113-perf-0825
-  KERNEL_LOCALVERSION: -perf-0825
+  KERNEL_RELEASE: 3.4.113-perf-KernelSU-0825
+  KERNEL_LOCALVERSION: -perf-KernelSU-0825
   TZ: Asia/Shanghai
   KBUILD_BUILD_TIMESTAMP: "Tue Aug 25 12:52:00 CST 2026"
   KBUILD_BUILD_VERSION: "1"
@@ -75,6 +79,24 @@ jobs:
           test -x "${TOOLCHAIN_PREFIX}gcc"
           echo "Toolchain:"
           "${TOOLCHAIN_PREFIX}gcc" --version
+      - name: Prepare KernelSU
+        env:
+          KERNELSU_REF: ${{ inputs.kernelsu_ref }}
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive KernelSU
+          if [ -n "$KERNELSU_REF" ]; then
+            git -C KernelSU fetch --force --tags origin "$KERNELSU_REF"
+            git -C KernelSU checkout --detach FETCH_HEAD
+          else
+            git -C KernelSU fetch --force --tags origin master
+            git -C KernelSU checkout --detach FETCH_HEAD
+          fi
+          test "$(git config -f .gitmodules --get submodule.KernelSU.url)" = "https://github.com/backslashxx/KernelSU.git"
+          test -f KernelSU/kernel/Kconfig
+          test -L drivers/kernelsu
+          test "$(readlink drivers/kernelsu)" = "../KernelSU/kernel"
+          git -C KernelSU rev-parse HEAD
       - name: Configure kernel
         run: |
           mkdir -p "$OUT_DIR"
@@ -94,6 +116,8 @@ jobs:
           make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" virgo_defconfig
           scripts/config --file "$OUT_DIR/.config" --set-str LOCALVERSION "$KERNEL_LOCALVERSION" --disable LOCALVERSION_AUTO
           make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" silentoldconfig
+          grep -qx 'CONFIG_KSU=y' "$OUT_DIR/.config"
+          grep -qx 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' "$OUT_DIR/.config"
           make -s "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" kernelrelease
       - name: Build kernel
         env:
@@ -127,7 +151,7 @@ jobs:
         env:
           ANYKERNEL_REF: ${{ inputs.anykernel_ref }}
         run: |
-          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage"
+          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage-dtb"
           test -s "$IMAGE_PATH"
           git clone --depth=1 "$ANYKERNEL3_REPOSITORY" AnyKernel3
           if [ -n "$ANYKERNEL_REF" ]; then
@@ -138,9 +162,9 @@ jobs:
           cp "$IMAGE_PATH" AnyKernel3/zImage
           cat > AnyKernel3/anykernel.sh <<'EOF'
           ### AnyKernel3 Ramdisk Mod Script
-          ### Xiaomi Mi Note (virgo/cancro) kernel
+          ### Xiaomi Mi Note (virgo) KernelSU kernel
           properties() { '
-          kernel.string=Xiaomi Mi Note (virgo/cancro) kernel
+          kernel.string=Xiaomi Mi Note (virgo) KernelSU kernel
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -164,19 +188,20 @@ jobs:
           write_boot;
           EOF
           mkdir -p artifacts
-          ZIP_NAME="AnyKernel3-virgo-${{ github.run_number }}.zip"
+          ZIP_NAME="AnyKernel3-KernelSU-virgo-${{ github.run_number }}.zip"
           (
             cd AnyKernel3
             zip -r9 "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME" . -x '*.git*' 'README.md'
           )
+          cp "$IMAGE_PATH" artifacts/zImage-dtb
+          git -C KernelSU rev-parse HEAD > artifacts/KernelSU-commit.txt
       - name: Show ccache statistics
         if: always()
         run: ccache --show-stats
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: virgo-${{ github.run_number }}
-          path: artifacts/AnyKernel3-virgo-${{ github.run_number }}.zip
-          archive: false
+          name: virgo-kernelsu-${{ github.run_number }}
+          path: artifacts/
           if-no-files-found: error
           retention-days: 30
