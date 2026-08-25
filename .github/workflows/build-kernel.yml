@@ -143,7 +143,7 @@ jobs:
           do.systemless=1
           do.cleanup=1
           do.cleanuponabort=0
-          device.name1=virgo
+          device.name1=cancro
           device.name2=
           device.name3=
           device.name4=
