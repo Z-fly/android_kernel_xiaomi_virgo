@@ -23,10 +23,10 @@ env:
   ARCH: arm
   SUBARCH: arm
   OUT_DIR: out
-  TOOLCHAIN_REPOSITORY: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.8
-  TOOLCHAIN_REF: android-5.1.1_r38
-  TOOLCHAIN_DIR: /opt/toolchain/arm-linux-androideabi-4.8
-  TOOLCHAIN_PREFIX: /opt/toolchain/arm-linux-androideabi-4.8/bin/arm-linux-androideabi-
+  TOOLCHAIN_REPOSITORY: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
+  TOOLCHAIN_REF: android-11.0.0_r48
+  TOOLCHAIN_DIR: /opt/toolchain/arm-linux-androideabi-4.9
+  TOOLCHAIN_PREFIX: /opt/toolchain/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
   KERNEL_RELEASE: 3.4.113-perf-0825
   KERNEL_LOCALVERSION: -perf-0825
   TZ: Asia/Shanghai
@@ -55,17 +55,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-aosp-gcc-4.8-${{ hashFiles('arch/arm/configs/cancro_user_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-aosp-gcc-4.9-${{ hashFiles('arch/arm/configs/cancro_user_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-aosp-gcc-4.8-
-            ccache-${{ runner.os }}-virgo-aosp-gcc-4.8-
+            ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-aosp-gcc-4.9-
+            ccache-${{ runner.os }}-virgo-aosp-gcc-4.9-
       - name: Configure ccache
         run: |
           mkdir -p "$CCACHE_DIR"
           ccache --set-config=max_size=5G
           ccache --set-config=compiler_check=content
           ccache --zero-stats
-      - name: Checkout AOSP GCC 4.8
+      - name: Checkout AOSP GCC 4.9
         run: |
           sudo install -d -o "$USER" -g "$(id -gn)" /opt/toolchain
           git clone --depth=1 --branch "$TOOLCHAIN_REF" --single-branch "$TOOLCHAIN_REPOSITORY" "$TOOLCHAIN_DIR"
