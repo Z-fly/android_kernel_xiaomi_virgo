@@ -24,7 +24,7 @@ env:
   SUBARCH: arm
   OUT_DIR: out
   TOOLCHAIN_REPOSITORY: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
-  TOOLCHAIN_REF: android-11.0.0_r48
+  TOOLCHAIN_REF: android-10.0.0_r47
   TOOLCHAIN_DIR: /opt/toolchain/arm-linux-androideabi-4.9
   TOOLCHAIN_PREFIX: /opt/toolchain/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
   KERNEL_RELEASE: 3.4.113-perf-0825
@@ -68,7 +68,10 @@ jobs:
       - name: Checkout AOSP GCC 4.9
         run: |
           sudo install -d -o "$USER" -g "$(id -gn)" /opt/toolchain
-          git clone --depth=1 --branch "$TOOLCHAIN_REF" --single-branch "$TOOLCHAIN_REPOSITORY" "$TOOLCHAIN_DIR"
+          git init "$TOOLCHAIN_DIR"
+          git -C "$TOOLCHAIN_DIR" remote add origin "$TOOLCHAIN_REPOSITORY"
+          git -C "$TOOLCHAIN_DIR" fetch --depth=1 origin "refs/tags/$TOOLCHAIN_REF"
+          git -C "$TOOLCHAIN_DIR" checkout --detach FETCH_HEAD
           test -x "${TOOLCHAIN_PREFIX}gcc"
           echo "Toolchain:"
           "${TOOLCHAIN_PREFIX}gcc" --version
