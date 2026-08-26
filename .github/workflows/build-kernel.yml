@@ -23,15 +23,18 @@ env:
   ARCH: arm
   SUBARCH: arm
   OUT_DIR: out
-  TOOLCHAIN_REPOSITORY: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
-  TOOLCHAIN_REF: android-10.0.0_r47
-  TOOLCHAIN_DIR: /opt/toolchain/arm-linux-androideabi-4.9
-  TOOLCHAIN_PREFIX: /opt/toolchain/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
+
+  TOOLCHAIN_URL: https://github.com/Deep-sea-lab/kernel_cancro_kernelsu/releases/download/gcc4.9.4/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz
+  TOOLCHAIN_SHA256: 232302236c90ec136a42d44bc387d2e1199f5df010b77e97ee590216d2b5b181
+  TOOLCHAIN_DIR: /opt/toolchain/gcc-linaro-4.9.4
+  TOOLCHAIN_PREFIX: /opt/toolchain/gcc-linaro-4.9.4/bin/arm-linux-gnueabi-
+
   KERNEL_RELEASE: 3.4.113-perf-KernelSU-0825
   KERNEL_LOCALVERSION: -perf-KernelSU-0825
   TZ: Asia/Shanghai
   KBUILD_BUILD_TIMESTAMP: "Tue Aug 25 12:52:00 CST 2026"
   KBUILD_BUILD_VERSION: "1"
+
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   EXTRA_MAKE_ARGS: ${{ inputs.extra_make_args }}
 
@@ -40,46 +43,77 @@ jobs:
     name: Build virgo_defconfig
     runs-on: ubuntu-22.04
     timeout-minutes: 180
+
     steps:
       - name: Checkout kernel
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
           submodules: recursive
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache flex git libssl-dev python3
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            curl \
+            flex \
+            git \
+            libssl-dev \
+            python3 \
+            xz-utils
+
       - name: Restore ccache
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-aosp-gcc-4.9-${{ hashFiles('arch/arm/configs/virgo_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-gcc-4.9.4-${{ hashFiles('arch/arm/configs/virgo_defconfig', '.gitmodules', '.github/workflows/build-kernel.yml') }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-aosp-gcc-4.9-
-            ccache-${{ runner.os }}-virgo-aosp-gcc-4.9-
+            ccache-${{ runner.os }}-${{ github.ref_name }}-virgo-linaro-gcc-4.9.4-
+            ccache-${{ runner.os }}-virgo-linaro-gcc-4.9.4-
+
       - name: Configure ccache
         run: |
           mkdir -p "$CCACHE_DIR"
           ccache --set-config=max_size=5G
           ccache --set-config=compiler_check=content
           ccache --zero-stats
-      - name: Checkout AOSP GCC 4.9
+
+      - name: Install Linaro GCC 4.9.4
         run: |
           sudo install -d -o "$USER" -g "$(id -gn)" /opt/toolchain
-          git init "$TOOLCHAIN_DIR"
-          git -C "$TOOLCHAIN_DIR" remote add origin "$TOOLCHAIN_REPOSITORY"
-          git -C "$TOOLCHAIN_DIR" fetch --depth=1 origin "refs/tags/$TOOLCHAIN_REF"
-          git -C "$TOOLCHAIN_DIR" checkout --detach FETCH_HEAD
+          mkdir -p "$TOOLCHAIN_DIR"
+
+          curl -fL \
+            --retry 5 \
+            --retry-delay 2 \
+            "$TOOLCHAIN_URL" \
+            -o /tmp/gcc-linaro-4.9.4.tar.xz
+
+          echo "${TOOLCHAIN_SHA256}  /tmp/gcc-linaro-4.9.4.tar.xz" \
+            | sha256sum -c -
+
+          tar -xJf /tmp/gcc-linaro-4.9.4.tar.xz \
+            -C "$TOOLCHAIN_DIR" \
+            --strip-components=1
+
+          rm -f /tmp/gcc-linaro-4.9.4.tar.xz
+
           test -x "${TOOLCHAIN_PREFIX}gcc"
+
           echo "Toolchain:"
           "${TOOLCHAIN_PREFIX}gcc" --version
+
       - name: Prepare KernelSU
         env:
           KERNELSU_REF: ${{ inputs.kernelsu_ref }}
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive KernelSU
+
           if [ -n "$KERNELSU_REF" ]; then
             git -C KernelSU fetch --force --tags origin "$KERNELSU_REF"
             git -C KernelSU checkout --detach FETCH_HEAD
@@ -87,18 +121,23 @@ jobs:
             git -C KernelSU fetch --force --tags origin master
             git -C KernelSU checkout --detach FETCH_HEAD
           fi
+
           test "$(git config -f .gitmodules --get submodule.KernelSU.url)" = "https://github.com/backslashxx/KernelSU.git"
           test -f KernelSU/kernel/Kconfig
           test -L drivers/kernelsu
           test "$(readlink drivers/kernelsu)" = "../KernelSU/kernel"
+
           git -C KernelSU rev-parse HEAD
+
       - name: Configure kernel
         run: |
           mkdir -p "$OUT_DIR"
+
           EXTRA_ARGS=()
           if [ -n "$EXTRA_MAKE_ARGS" ]; then
             read -r -a EXTRA_ARGS <<< "$EXTRA_MAKE_ARGS"
           fi
+
           MAKE_ARGS=(
             O="$OUT_DIR"
             ARCH="$ARCH"
@@ -108,12 +147,21 @@ jobs:
             HOSTCFLAGS="-fcommon"
             LOCALVERSION=""
           )
+
           make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" virgo_defconfig
-          scripts/config --file "$OUT_DIR/.config" --set-str LOCALVERSION "$KERNEL_LOCALVERSION" --disable LOCALVERSION_AUTO
+
+          scripts/config \
+            --file "$OUT_DIR/.config" \
+            --set-str LOCALVERSION "$KERNEL_LOCALVERSION" \
+            --disable LOCALVERSION_AUTO
+
           make "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" silentoldconfig
+
           grep -qx 'CONFIG_KSU=y' "$OUT_DIR/.config"
           grep -qx 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' "$OUT_DIR/.config"
+
           make -s "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" kernelrelease
+
       - name: Build kernel
         env:
           JOBS: ${{ inputs.make_jobs }}
@@ -124,14 +172,17 @@ jobs:
               exit 1
               ;;
           esac
+
           if [ "$JOBS" -lt 1 ]; then
             echo "make_jobs must be at least 1" >&2
             exit 1
           fi
+
           EXTRA_ARGS=()
           if [ -n "$EXTRA_MAKE_ARGS" ]; then
             read -r -a EXTRA_ARGS <<< "$EXTRA_MAKE_ARGS"
           fi
+
           MAKE_ARGS=(
             O="$OUT_DIR"
             ARCH="$ARCH"
@@ -141,7 +192,11 @@ jobs:
             HOSTCFLAGS="-fcommon"
             LOCALVERSION=""
           )
-          make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}"
+
+          make -j"$JOBS" \
+            "${MAKE_ARGS[@]}" \
+            "${EXTRA_ARGS[@]}"
+
       - name: Repack boot image
         run: |
           python3 - ".github/boot.img" "$OUT_DIR/arch/arm/boot/zImage-dtb" \
@@ -157,44 +212,62 @@ jobs:
 
           if boot[:8] != b"ANDROID!":
               raise SystemExit(f"invalid Android boot image: {template_path}")
+
           if len(kernel) < 0x28 or struct.unpack_from("<I", kernel, 0x24)[0] != 0x016F2818:
               raise SystemExit(f"invalid ARM zImage: {kernel_path}")
 
           u32 = lambda offset: struct.unpack_from("<I", boot, offset)[0]
+
           old_kernel_size, ramdisk_size, second_size, page_size, extra_size = map(
               u32, (8, 16, 24, 36, 40)
           )
+
           if page_size < 608 or page_size & (page_size - 1):
               raise SystemExit(f"invalid page size: {page_size}")
+
           align = lambda size: (size + page_size - 1) // page_size * page_size
 
           offset = page_size + align(old_kernel_size)
+
           ramdisk = boot[offset:offset + ramdisk_size]
           offset += align(ramdisk_size)
+
           second = boot[offset:offset + second_size]
           offset += align(second_size)
+
           extra = boot[offset:offset + extra_size]
+
           if offset + align(extra_size) != len(boot):
               raise SystemExit("unexpected legacy boot image layout")
 
           header = bytearray(boot[:page_size])
           struct.pack_into("<I", header, 8, len(kernel))
+
           digest = hashlib.sha1()
+
           for part in (kernel, ramdisk, second, extra):
               digest.update(part)
               digest.update(struct.pack("<I", len(part)))
+
           header[576:608] = digest.digest() + bytes(12)
 
           pad = lambda part: part + bytes(align(len(part)) - len(part))
-          image = bytes(header) + b"".join(map(pad, (kernel, ramdisk, second, extra)))
+
+          image = bytes(header) + b"".join(
+              map(pad, (kernel, ramdisk, second, extra))
+          )
+
           output_path.parent.mkdir(parents=True, exist_ok=True)
           output_path.write_bytes(image)
+
           print(f"Repacked {output_path} ({len(image)} bytes)")
           print(f"SHA-256: {hashlib.sha256(image).hexdigest()}")
           PY
+
       - name: Show ccache statistics
         if: always()
         run: ccache --show-stats
+
       - name: Upload repacked boot image
         uses: actions/upload-artifact@v7
         with:
