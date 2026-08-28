@@ -101,17 +101,17 @@ jobs:
             HOSTCFLAGS="-fcommon"
             LOCALVERSION=""
           )
-          make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" zImage-dtb
+          make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}" zImage
       - name: Verify kernel image and metadata
         run: |
-          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage-dtb"
+          IMAGE_PATH="$OUT_DIR/arch/arm/boot/zImage"
           test -s "$IMAGE_PATH"
           grep -Fq "#define UTS_RELEASE \"$KERNEL_RELEASE\"" "$OUT_DIR/include/generated/utsrelease.h"
           grep -Fq "$KBUILD_BUILD_TIMESTAMP" "$OUT_DIR/include/generated/compile.h"
           ls -lh "$IMAGE_PATH"
       - name: Repack boot image
         run: |
-          python3 - ".github/boot.img" "$OUT_DIR/arch/arm/boot/zImage-dtb" \
+          python3 - ".github/boot.img" "$OUT_DIR/arch/arm/boot/zImage" \
             "artifacts/boot-${KERNEL_RELEASE}-${GITHUB_RUN_NUMBER}.img" <<'PY'
           from pathlib import Path
           import hashlib
