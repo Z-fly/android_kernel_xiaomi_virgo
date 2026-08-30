@@ -144,7 +144,7 @@ jobs:
           make -j"$JOBS" "${MAKE_ARGS[@]}" "${EXTRA_ARGS[@]}"
       - name: Repack boot image
         run: |
-          python3 - ".github/boot.img" "$OUT_DIR/arch/arm/boot/zImage-dtb" \
+          python3 - ".github/boot.img" "$OUT_DIR/arch/arm/boot/zImage" \
             "artifacts/boot-${KERNEL_RELEASE}-${GITHUB_RUN_NUMBER}.img" <<'PY'
           from pathlib import Path
           import hashlib
