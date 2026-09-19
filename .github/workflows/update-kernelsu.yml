@@ -1,0 +1,58 @@
+name: Update KernelSU Submodule
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-kernelsu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Update and commit KernelSU
+        shell: bash
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          original_head=$(git rev-parse HEAD)
+          commit_message='Update KernelSU Submodule'
+
+          git submodule sync -- KernelSU
+          git -C KernelSU fetch --no-tags origin master
+          git -C KernelSU checkout --detach FETCH_HEAD
+          git -C KernelSU submodule update --init --recursive
+          git add -- KernelSU
+
+          if git diff --cached --quiet -- KernelSU; then
+            echo 'KernelSU is already up to date.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if [ "$(git log -1 --format=%s)" = "$commit_message" ]; then
+            git commit --amend --no-edit
+          else
+            git commit -m "$commit_message"
+          fi
+
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$original_head" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
