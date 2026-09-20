@@ -3,7 +3,8 @@ name: Update KernelSU Submodule
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '13 8 * * *'
+      timezone: 'Asia/Shanghai'
 
 permissions:
   contents: write
